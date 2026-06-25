@@ -544,6 +544,8 @@ OCR 通过四层优先级链解析评审规则。每层采用首次匹配原则�
 | `providers.<name>.models` | array | 用于交互式选择的可选供应商模型列表 |
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
 | `custom_providers.<name>.*` | — | 与 `providers.<name>.*` 相同的字段，包括可选的 `models` |
+| `routing.models` | array | 用于故障转移的有序模型池：`[{provider, model}]`（见[多模型故障转移](#多模型故障转移)） |
+| `routing.policy` | string | 选择策略；`priority`（默认，目前唯一取值） |
 | `llm.url` | string | `https://api.openai.com/v1/chat/completions` |
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.auth_header` | string | 仅 Anthropic：`x-api-key` \| `authorization` |
@@ -566,6 +568,32 @@ OCR 通过四层优先级链解析评审规则。每层采用首次匹配原则�
 | `OCR_LLM_AUTH_HEADER` | Anthropic 认证头（`x-api-key` 或 `authorization`） |
 | `OCR_LLM_MODEL` | 模型名称 |
 | `OCR_USE_ANTHROPIC` | `true` = Anthropic，`false` = OpenAI |
+
+### 多模型故障转移
+
+默认评审使用单一模型（`provider` + `model`）。为应对限流与供应商故障，可配置有序的 `routing.models` 池——评审按顺序尝试，当某个模型被限流、返回服务端错误或超时时，自动转移到下一个：
+
+```json
+{
+  "providers": {
+    "anthropic": { "api_key": "sk-ant-...", "model": "claude-opus-4-6" },
+    "deepseek":  { "api_key": "sk-...",     "model": "deepseek-v3" }
+  },
+  "routing": {
+    "models": [
+      { "provider": "anthropic", "model": "claude-opus-4-6" },
+      { "provider": "deepseek",  "model": "deepseek-v3" }
+    ],
+    "policy": "priority"
+  }
+}
+```
+
+- 每个条目引用一个已配置的供应商（提供凭据 / 端点）及一个模型；省略 `model` 时使用该供应商的默认模型。
+- `routing.policy` 决定池的排序方式。目前仅支持 `priority`（第一个为主模型）；该字段为未来策略（如 weighted）预留，填入未知值会报错而非被静默忽略。
+- 被限流或不可用的模型会被短暂搁置，使并发的逐文件评审跳过它，而非各自重复命中。
+- 仅在可用性错误（限流、5xx、网络 / 超时）时转移。客户端错误（请求错误、负载过大）**不**触发转移，因为换个模型同样会失败。
+- 不配置 `routing.models` 时行为不变。`--model` 固定单一模型并绕过该池。
 
 
 ## 遥测
