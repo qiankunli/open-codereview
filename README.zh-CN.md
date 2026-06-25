@@ -545,7 +545,7 @@ OCR 通过四层优先级链解析评审规则。每层采用首次匹配原则�
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
 | `custom_providers.<name>.*` | — | 与 `providers.<name>.*` 相同的字段，包括可选的 `models` |
 | `routing.models` | array | 用于故障转移的有序模型池：`[{provider, model}]`（见[多模型故障转移](#多模型故障转移)） |
-| `routing.policy` | string | 选择策略；`priority`（默认，目前唯一取值） |
+| `routing.policy` | string | 池选择策略：`priority`（默认）或 `round-robin` |
 | `llm.url` | string | `https://api.openai.com/v1/chat/completions` |
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.auth_header` | string | 仅 Anthropic：`x-api-key` \| `authorization` |
@@ -590,7 +590,7 @@ OCR 通过四层优先级链解析评审规则。每层采用首次匹配原则�
 ```
 
 - 每个条目引用一个已配置的供应商（提供凭据 / 端点）及一个模型；省略 `model` 时使用该供应商的默认模型。
-- `routing.policy` 决定池的排序方式。目前仅支持 `priority`（第一个为主模型）；该字段为未来策略（如 weighted）预留，填入未知值会报错而非被静默忽略。
+- `routing.policy` 决定池的排序方式：`priority`（默认）始终优先第一个、仅在失败时转移；`round-robin` 每次调用轮转起始模型，把负载摊到整个池——当某 provider **按 endpoint 限流**时（如火山方舟 Ark）尤其有用，避免并发评审把单个 endpoint 打满。两种策略下，单次失败仍会转移到池中其余成员。填入未知值会报错而非被静默忽略。
 - 被限流或不可用的模型会被短暂搁置，使并发的逐文件评审跳过它，而非各自重复命中。
 - 仅在可用性错误（限流、5xx、网络 / 超时）时转移。客户端错误（请求错误、负载过大）**不**触发转移，因为换个模型同样会失败。
 - 不配置 `routing.models` 时行为不变。`--model` 固定单一模型并绕过该池。

@@ -145,13 +145,13 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath, modelOverride string
 	}
 	tpl.ApplyLanguage(lang)
 
-	eps, err := llm.ResolveModelsWithModelOverride(cfgPath, modelOverride)
+	eps, policy, err := llm.ResolveModelsWithModelOverride(cfgPath, modelOverride)
 	if err != nil {
 		return nil, fmt.Errorf("resolve LLM endpoint: %w", err)
 	}
 
 	return &llmRuntime{
-		Client:       llm.NewLLMRouter(eps),
+		Client:       llm.NewLLMRouter(eps, policy),
 		Model:        eps[0].Model,
 		PlanToolDefs: planToolDefs,
 		MainToolDefs: mainToolDefs,

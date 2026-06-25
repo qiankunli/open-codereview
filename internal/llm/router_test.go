@@ -124,10 +124,10 @@ func TestShouldFallover(t *testing.T) {
 
 func TestNewLLMRouter_SinglePoolNoRouter(t *testing.T) {
 	ep := ResolvedEndpoint{URL: "https://x.example.com", Protocol: "openai", Model: "m", Token: "t"}
-	if _, isRouter := NewLLMRouter([]ResolvedEndpoint{ep}).(*LLMRouter); isRouter {
+	if _, isRouter := NewLLMRouter([]ResolvedEndpoint{ep}, "").(*LLMRouter); isRouter {
 		t.Fatal("single-model pool should not be wrapped in a router")
 	}
-	two := NewLLMRouter([]ResolvedEndpoint{ep, ep})
+	two := NewLLMRouter([]ResolvedEndpoint{ep, ep}, "")
 	if _, isRouter := two.(*LLMRouter); !isRouter {
 		t.Fatal("multi-model pool should be a router")
 	}
@@ -153,9 +153,12 @@ func TestResolveModels_Chain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eps, err := ResolveModels(cfgPath)
+	eps, policy, err := ResolveModels(cfgPath)
 	if err != nil {
 		t.Fatalf("ResolveModels: %v", err)
+	}
+	if policy != policyPriority {
+		t.Errorf("policy=%q, want %q", policy, policyPriority)
 	}
 	if len(eps) != 2 {
 		t.Fatalf("pool size=%d, want 2", len(eps))
@@ -186,7 +189,56 @@ func TestResolveModels_RejectsUnknownPolicy(t *testing.T) {
 	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveModels(cfgPath); err == nil {
+	if _, _, err := ResolveModels(cfgPath); err == nil {
 		t.Fatal("expected error for unsupported routing.policy, got nil")
+	}
+}
+
+func TestLLMRouter_RoundRobinSpreadsLoad(t *testing.T) {
+	c0 := &fakeClient{resp: &ChatResponse{ID: "0"}}
+	c1 := &fakeClient{resp: &ChatResponse{ID: "1"}}
+	c2 := &fakeClient{resp: &ChatResponse{ID: "2"}}
+	r := &LLMRouter{
+		members:  []routerMember{{c0, "a"}, {c1, "b"}, {c2, "c"}},
+		policy:   policyRoundRobin,
+		cooldown: make(map[int]time.Time),
+	}
+	// All members succeed → only the first in each call's order() is hit. Over len(pool)
+	// calls, round-robin must rotate the start so each member is picked exactly once.
+	for i := range 3 {
+		if _, err := r.CompletionsWithCtx(context.Background(), ChatRequest{}); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if c0.calls != 1 || c1.calls != 1 || c2.calls != 1 {
+		t.Fatalf("round-robin did not spread load: c0=%d c1=%d c2=%d, want 1/1/1", c0.calls, c1.calls, c2.calls)
+	}
+}
+
+func TestResolveModels_AcceptsRoundRobin(t *testing.T) {
+	for _, k := range []string{"OCR_LLM_URL", "OCR_LLM_TOKEN", "OCR_LLM_MODEL", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+		t.Setenv(k, "")
+	}
+	cfg := configFile{
+		Routing: routingConfig{
+			Models: []modelRef{{Provider: "p1"}, {Provider: "p2"}},
+			Policy: "round-robin",
+		},
+		CustomProviders: map[string]providerEntryConfig{
+			"p1": {URL: "https://a.example.com", Protocol: "openai", APIKey: "k1", Model: "m1"},
+			"p2": {URL: "https://b.example.com", Protocol: "openai", APIKey: "k2", Model: "m2"},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, policy, err := ResolveModels(cfgPath)
+	if err != nil {
+		t.Fatalf("ResolveModels: %v", err)
+	}
+	if policy != policyRoundRobin {
+		t.Errorf("policy=%q, want %q", policy, policyRoundRobin)
 	}
 }
