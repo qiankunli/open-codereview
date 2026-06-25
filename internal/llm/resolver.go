@@ -18,7 +18,7 @@ type ResolvedEndpoint struct {
 	AuthHeader string         // Anthropic auth header: "x-api-key" or "authorization"
 	Source     string         // human-readable config source label
 	ExtraBody  map[string]any // vendor-specific request body fields
-	MaxRetries int            // optional per-endpoint SDK retry budget (0 = default); set low for router members
+	MaxRetries int            // internal SDK retry budget (0 = SDK default); not read from config — set by NewLLMRouter, low for pool members so a throttled one fails fast to the next
 }
 
 // Environment variable names for OCR-specific configuration.
@@ -210,6 +210,7 @@ func resolveModelRef(cfg configFile, ref modelRef) (ResolvedEndpoint, error) {
 	}
 	sub := cfg
 	sub.Provider = ref.Provider
+	sub.Model = "" // don't let a top-level `model` leak into routing entries; model comes from ref.Model or the provider default
 	sub.Routing = routingConfig{}
 	ep, ok, err := tryProviderConfig(sub, ref.Model)
 	if err != nil {
