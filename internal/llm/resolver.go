@@ -223,41 +223,46 @@ func resolveModelRef(cfg configFile, ref modelRef) (ResolvedEndpoint, error) {
 	return ep, nil
 }
 
-// ResolveModels resolves the full ordered model pool for the router.
-func ResolveModels(configPath string) ([]ResolvedEndpoint, error) {
+// ResolveModels resolves the full ordered model pool plus its routing policy.
+func ResolveModels(configPath string) ([]ResolvedEndpoint, string, error) {
 	return ResolveModelsWithModelOverride(configPath, "")
 }
 
-// ResolveModelsWithModelOverride returns the ordered pool of endpoints. An explicit
-// modelOverride (--model) bypasses the pool and pins a single endpoint. Without it, a
-// config `models` list resolves to the whole chain; otherwise it falls back to the
-// single-endpoint resolution (env / single provider / legacy / shell), wrapped as a
-// one-element pool — so existing configs behave exactly as before.
-func ResolveModelsWithModelOverride(configPath, modelOverride string) ([]ResolvedEndpoint, error) {
+// ResolveModelsWithModelOverride returns the ordered pool of endpoints and the routing
+// policy ("priority" default). An explicit modelOverride (--model) bypasses the pool and
+// pins a single endpoint (policy "priority"). Without it, a config `routing.models` list
+// resolves to the whole chain; otherwise it falls back to single-endpoint resolution
+// (env / single provider / legacy / shell), wrapped as a one-element pool — so existing
+// configs behave exactly as before.
+func ResolveModelsWithModelOverride(configPath, modelOverride string) ([]ResolvedEndpoint, string, error) {
 	if strings.TrimSpace(modelOverride) == "" {
 		if cfg, ok, err := loadConfigFile(configPath); err != nil {
-			return nil, err
+			return nil, "", err
 		} else if ok && len(cfg.Routing.Models) > 0 {
-			if pol := strings.TrimSpace(cfg.Routing.Policy); pol != "" && pol != "priority" {
-				return nil, fmt.Errorf("unsupported routing.policy %q (only \"priority\" is supported)", pol)
+			policy := strings.TrimSpace(cfg.Routing.Policy)
+			if policy == "" {
+				policy = policyPriority
+			}
+			if policy != policyPriority && policy != policyRoundRobin {
+				return nil, "", fmt.Errorf("unsupported routing.policy %q (want %q or %q)", policy, policyPriority, policyRoundRobin)
 			}
 			eps := make([]ResolvedEndpoint, 0, len(cfg.Routing.Models))
 			for _, ref := range cfg.Routing.Models {
 				ep, err := resolveModelRef(cfg, ref)
 				if err != nil {
-					return nil, err
+					return nil, "", err
 				}
 				eps = append(eps, ep)
 			}
-			return eps, nil
+			return eps, policy, nil
 		}
 	}
 
 	ep, err := ResolveEndpointWithModelOverride(configPath, modelOverride)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return []ResolvedEndpoint{ep}, nil
+	return []ResolvedEndpoint{ep}, policyPriority, nil
 }
 
 // tryProviderConfig resolves an endpoint from the provider-based configuration.

@@ -228,6 +228,14 @@ const (
 	routerCooldown      = 30 * time.Second
 )
 
+// routing.policy values. priority: always prefer member 0, fall over on failure.
+// round-robin: rotate the starting member each call to spread load across the pool
+// (e.g. Ark rate-limits per endpoint, so spreading avoids saturating any single one).
+const (
+	policyPriority   = "priority"
+	policyRoundRobin = "round-robin"
+)
+
 type routerMember struct {
 	client LLMClient
 	label  string // "protocol/model" for logs
@@ -238,19 +246,25 @@ type routerMember struct {
 // errors (bad request / payload too large) short-circuit since another model would
 // fail identically. Cooldown state is shared across concurrent CompletionsWithCtx
 // calls (one ocr run's per-file subtasks), so a throttled model is skipped fleet-wide.
-// Selection is strict priority order today; the order() seam is where a weighted /
-// capability policy would plug in.
+// Selection is governed by `policy` via the order() seam: "priority" (default) prefers
+// member 0; "round-robin" spreads the starting member across the pool.
 type LLMRouter struct {
 	members  []routerMember
+	policy   string
 	mu       sync.Mutex
 	cooldown map[int]time.Time // member index → parked-until
+	next     uint64            // round-robin cursor (guarded by mu)
 }
 
-// NewLLMRouter builds an LLMClient from an ordered pool. A pool of one returns a
-// plain client (no router overhead, unchanged single-model behavior).
-func NewLLMRouter(eps []ResolvedEndpoint) LLMClient {
+// NewLLMRouter builds an LLMClient from an ordered pool under the given routing policy
+// ("" → priority). A pool of one returns a plain client (no router overhead, unchanged
+// single-model behavior).
+func NewLLMRouter(eps []ResolvedEndpoint, policy string) LLMClient {
 	if len(eps) == 1 {
 		return NewLLMClient(eps[0])
+	}
+	if policy == "" {
+		policy = policyPriority
 	}
 	members := make([]routerMember, len(eps))
 	for i, ep := range eps {
@@ -259,7 +273,7 @@ func NewLLMRouter(eps []ResolvedEndpoint) LLMClient {
 		}
 		members[i] = routerMember{client: NewLLMClient(ep), label: ep.Protocol + "/" + ep.Model}
 	}
-	return &LLMRouter{members: members, cooldown: make(map[int]time.Time)}
+	return &LLMRouter{members: members, policy: policy, cooldown: make(map[int]time.Time)}
 }
 
 func (r *LLMRouter) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -286,8 +300,10 @@ func (r *LLMRouter) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*C
 	return nil, fmt.Errorf("all %d models exhausted; last error: %w", len(r.members), lastErr)
 }
 
-// order returns member indices in priority order with non-parked first; parked ones
-// are appended (not dropped) so an all-parked pool is still attempted as last resort.
+// order returns member indices to try, non-parked first; parked ones are appended
+// (not dropped) so an all-parked pool is still attempted as last resort. The live set
+// is ordered per policy: priority keeps config order (member 0 preferred); round-robin
+// rotates the start each call so load spreads across the pool.
 func (r *LLMRouter) order() []int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -305,6 +321,14 @@ func (r *LLMRouter) order() []int {
 		} else {
 			live = append(live, i)
 		}
+	}
+	if r.policy == policyRoundRobin && len(live) > 1 {
+		s := int(r.next % uint64(len(live)))
+		r.next++
+		rot := make([]int, 0, len(live))
+		rot = append(rot, live[s:]...)
+		rot = append(rot, live[:s]...)
+		live = rot
 	}
 	return append(live, parked...)
 }

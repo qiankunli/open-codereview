@@ -560,7 +560,7 @@ Config file: `~/.opencodereview/config.json`
 | `providers.<name>.auth_header` | string | `x-api-key` \| `authorization` |
 | `custom_providers.<name>.*` | — | Same fields as `providers.<name>.*`, including optional `models` |
 | `routing.models` | array | Ordered model pool for failover: `[{provider, model}]` (see [Multi-model fallback](#multi-model-fallback)) |
-| `routing.policy` | string | Selection policy; `priority` (default, only value today) |
+| `routing.policy` | string | Pool selection: `priority` (default) or `round-robin` |
 | `llm.url` | string | `https://api.openai.com/v1/chat/completions` |
 | `llm.auth_token` | string | `sk-xxxxxxx` |
 | `llm.auth_header` | string | Anthropic only: `x-api-key` \| `authorization` |
@@ -605,7 +605,7 @@ By default a review uses a single model (`provider` + `model`). To survive rate 
 ```
 
 - Each entry references a configured provider (for credentials / endpoint) and a model; an omitted `model` uses the provider's default.
-- `routing.policy` selects how the pool is ordered. Only `priority` is supported today (first entry is primary); the field is reserved for future policies (e.g. weighted), and an unknown value is rejected rather than silently ignored.
+- `routing.policy` selects how the pool is ordered: `priority` (default) always prefers the first entry and only falls over on failure; `round-robin` rotates the starting model each call so load spreads across the pool — useful when a provider rate-limits **per endpoint** (e.g. Volcengine Ark), so no single one saturates under concurrent per-file reviews. Either way, a failed attempt still falls over to the remaining members. An unknown value is rejected rather than silently ignored.
 - A rate-limited or unavailable model is briefly parked so concurrent per-file reviews skip it instead of each re-hitting it.
 - Failover triggers on availability errors (rate limit, 5xx, network/timeout). Client-side errors (bad request, payload too large) do **not** trigger failover, since another model would fail identically.
 - Without `routing.models`, behavior is unchanged. `--model` pins a single model and bypasses the pool.
