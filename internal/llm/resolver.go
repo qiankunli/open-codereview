@@ -19,6 +19,7 @@ type ResolvedEndpoint struct {
 	Source     string         // human-readable config source label
 	ExtraBody  map[string]any // vendor-specific request body fields
 	MaxRetries int            // internal SDK retry budget (0 = SDK default); not read from config — set by NewLLMRouter, low for pool members so a throttled one fails fast to the next
+	Alias      string         // routing alias (routing.models[].alias); stamped onto comments this endpoint produces
 }
 
 // Environment variable names for OCR-specific configuration.
@@ -142,6 +143,7 @@ type providerEntryConfig struct {
 type modelRef struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model,omitempty"`
+	Alias    string `json:"alias,omitempty"` // friendly label stamped onto comments this model produces
 }
 
 // routingConfig is the multi-model namespace: an ordered pool plus a selection
@@ -220,6 +222,7 @@ func resolveModelRef(cfg configFile, ref modelRef) (ResolvedEndpoint, error) {
 		return ResolvedEndpoint{}, fmt.Errorf("models[] entry {provider:%q model:%q} did not resolve to a complete endpoint", ref.Provider, ref.Model)
 	}
 	ep.Model = stripModelSuffix(ep.Model)
+	ep.Alias = ref.Alias
 	return ep, nil
 }
 

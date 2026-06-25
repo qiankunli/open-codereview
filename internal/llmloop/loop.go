@@ -181,7 +181,7 @@ func (r *Runner) RunPerFile(ctx context.Context, messages []llm.Message, newPath
 		hasValidResult := false
 
 		for _, call := range calls {
-			cp := r.executeToolCall(ctx, newPath, call, rec)
+			cp := r.executeToolCall(ctx, newPath, call, rec, resp.Alias)
 			if cp.Completed {
 				results = append(results, tool.ToolCallResult{
 					ToolCallID: call.ID,
@@ -236,7 +236,9 @@ func (r *Runner) RunPerFile(ctx context.Context, messages []llm.Message, newPath
 // records the result in session history. code_comment handling includes
 // optional async dispatch through CommentWorkerPool plus line-number
 // resolution / re-location.
-func (r *Runner) executeToolCall(ctx context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
+// alias is the routing alias of the model that produced this tool call's response;
+// it is stamped onto any comments parsed here so multi-model output can be compared.
+func (r *Runner) executeToolCall(ctx context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord, alias string) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
 		return tool.Of(tool.NotAvailableMsg)
@@ -272,6 +274,10 @@ func (r *Runner) executeToolCall(ctx context.Context, newPath string, call llm.T
 		if errMsg != "" {
 			telemetry.RecordToolCall(ctx, t.Name(), time.Since(startTime), false)
 			return tool.Of(errMsg)
+		}
+		// Attribute each finding to the model that produced it (for multi-model compare).
+		for i := range comments {
+			comments[i].Alias = alias
 		}
 
 		resolveAndCollect := func(rctx context.Context) {

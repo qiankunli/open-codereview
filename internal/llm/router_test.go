@@ -33,7 +33,7 @@ func newRouter(members ...routerMember) *LLMRouter {
 func TestLLMRouter_FalloverThenSuccess(t *testing.T) {
 	c0 := &fakeClient{err: errors.New("network blip")} // unknown error → fallover
 	c1 := &fakeClient{resp: &ChatResponse{ID: "ok"}}
-	r := newRouter(routerMember{c0, "a"}, routerMember{c1, "b"})
+	r := newRouter(routerMember{client: c0, label: "a"}, routerMember{client: c1, label: "b"})
 
 	resp, err := r.CompletionsWithCtx(context.Background(), ChatRequest{})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestLLMRouter_FalloverThenSuccess(t *testing.T) {
 func TestLLMRouter_ClientErrorShortCircuits(t *testing.T) {
 	c0 := &fakeClient{err: &openai.Error{StatusCode: 400}} // bad request → no fallover
 	c1 := &fakeClient{resp: &ChatResponse{ID: "ok"}}
-	r := newRouter(routerMember{c0, "a"}, routerMember{c1, "b"})
+	r := newRouter(routerMember{client: c0, label: "a"}, routerMember{client: c1, label: "b"})
 
 	if _, err := r.CompletionsWithCtx(context.Background(), ChatRequest{}); err == nil {
 		t.Fatal("expected error to propagate, got nil")
@@ -74,7 +74,7 @@ func TestLLMRouter_ClientErrorShortCircuits(t *testing.T) {
 func TestLLMRouter_AllExhausted(t *testing.T) {
 	c0 := &fakeClient{err: errors.New("down")}
 	c1 := &fakeClient{err: errors.New("down")}
-	r := newRouter(routerMember{c0, "a"}, routerMember{c1, "b"})
+	r := newRouter(routerMember{client: c0, label: "a"}, routerMember{client: c1, label: "b"})
 
 	_, err := r.CompletionsWithCtx(context.Background(), ChatRequest{})
 	if err == nil {
@@ -88,7 +88,7 @@ func TestLLMRouter_AllExhausted(t *testing.T) {
 func TestLLMRouter_StopsWhenContextDone(t *testing.T) {
 	c0 := &fakeClient{err: errors.New("boom")}
 	c1 := &fakeClient{resp: &ChatResponse{ID: "ok"}}
-	r := newRouter(routerMember{c0, "a"}, routerMember{c1, "b"})
+	r := newRouter(routerMember{client: c0, label: "a"}, routerMember{client: c1, label: "b"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // shared budget exhausted — no member can succeed
@@ -139,7 +139,7 @@ func TestResolveModels_Chain(t *testing.T) {
 	}
 	cfg := configFile{
 		Routing: routingConfig{
-			Models: []modelRef{{Provider: "p1"}, {Provider: "p2", Model: "m2b"}},
+			Models: []modelRef{{Provider: "p1", Alias: "primary"}, {Provider: "p2", Model: "m2b"}},
 			Policy: "priority",
 		},
 		CustomProviders: map[string]providerEntryConfig{
@@ -168,6 +168,24 @@ func TestResolveModels_Chain(t *testing.T) {
 	}
 	if eps[1].Model != "m2b" { // explicit ref.Model wins over the provider's default m2
 		t.Errorf("eps[1].Model=%q, want m2b (ref.Model overrides provider default)", eps[1].Model)
+	}
+	if eps[0].Alias != "primary" { // routing.models[].alias flows to the endpoint
+		t.Errorf("eps[0].Alias=%q, want primary", eps[0].Alias)
+	}
+}
+
+func TestLLMRouter_StampsAliasOnResponse(t *testing.T) {
+	c := &fakeClient{resp: &ChatResponse{ID: "ok"}}
+	r := &LLMRouter{
+		members:  []routerMember{{client: c, label: "x", alias: "deepseek"}},
+		cooldown: make(map[int]time.Time),
+	}
+	resp, err := r.CompletionsWithCtx(context.Background(), ChatRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Alias != "deepseek" { // router attributes the response to the member that served it
+		t.Fatalf("resp.Alias=%q, want deepseek", resp.Alias)
 	}
 }
 
@@ -199,7 +217,7 @@ func TestLLMRouter_RoundRobinSpreadsLoad(t *testing.T) {
 	c1 := &fakeClient{resp: &ChatResponse{ID: "1"}}
 	c2 := &fakeClient{resp: &ChatResponse{ID: "2"}}
 	r := &LLMRouter{
-		members:  []routerMember{{c0, "a"}, {c1, "b"}, {c2, "c"}},
+		members:  []routerMember{{client: c0, label: "a"}, {client: c1, label: "b"}, {client: c2, label: "c"}},
 		policy:   policyRoundRobin,
 		cooldown: make(map[int]time.Time),
 	}

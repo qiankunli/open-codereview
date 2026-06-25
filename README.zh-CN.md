@@ -581,15 +581,16 @@ OCR 通过四层优先级链解析评审规则。每层采用首次匹配原则�
   },
   "routing": {
     "models": [
-      { "provider": "anthropic", "model": "claude-opus-4-6" },
-      { "provider": "deepseek",  "model": "deepseek-v3" }
+      { "provider": "anthropic", "model": "claude-opus-4-6", "alias": "opus" },
+      { "provider": "deepseek",  "model": "deepseek-v3",     "alias": "ds" }
     ],
-    "policy": "priority"
+    "policy": "round-robin"
   }
 }
 ```
 
 - 每个条目引用一个已配置的供应商（提供凭据 / 端点）及一个模型；省略 `model` 时使用该供应商的默认模型。
+- `alias`（可选）是盖在该模型所产出每条评论上的友好标签（`--format json` 下每条评论带 `alias` 字段）。配合 `round-robin`（把文件分散到池中各模型）即可对比「哪个模型找到了什么」。
 - `routing.policy` 决定池的排序方式：`priority`（默认）始终优先第一个、仅在失败时转移；`round-robin` 每次调用轮转起始模型，把负载摊到整个池——当某 provider **按 endpoint 限流**时（如火山方舟 Ark）尤其有用，避免并发评审把单个 endpoint 打满。两种策略下，单次失败仍会转移到池中其余成员。填入未知值会报错而非被静默忽略。
 - 被限流或不可用的模型会被短暂搁置，使并发的逐文件评审跳过它，而非各自重复命中。
 - 仅在可用性错误（限流、5xx、网络 / 超时）时转移。客户端错误（请求错误、负载过大）**不**触发转移，因为换个模型同样会失败。

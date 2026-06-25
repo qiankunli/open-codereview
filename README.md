@@ -596,15 +596,16 @@ By default a review uses a single model (`provider` + `model`). To survive rate 
   },
   "routing": {
     "models": [
-      { "provider": "anthropic", "model": "claude-opus-4-6" },
-      { "provider": "deepseek",  "model": "deepseek-v3" }
+      { "provider": "anthropic", "model": "claude-opus-4-6", "alias": "opus" },
+      { "provider": "deepseek",  "model": "deepseek-v3",     "alias": "ds" }
     ],
-    "policy": "priority"
+    "policy": "round-robin"
   }
 }
 ```
 
 - Each entry references a configured provider (for credentials / endpoint) and a model; an omitted `model` uses the provider's default.
+- `alias` (optional) is a friendly label stamped onto every comment that model produces (in `--format json`, each comment carries an `alias` field). Combined with `round-robin` — which spreads files across the pool — this lets you compare which model found what.
 - `routing.policy` selects how the pool is ordered: `priority` (default) always prefers the first entry and only falls over on failure; `round-robin` rotates the starting model each call so load spreads across the pool — useful when a provider rate-limits **per endpoint** (e.g. Volcengine Ark), so no single one saturates under concurrent per-file reviews. Either way, a failed attempt still falls over to the remaining members. An unknown value is rejected rather than silently ignored.
 - A rate-limited or unavailable model is briefly parked so concurrent per-file reviews skip it instead of each re-hitting it.
 - Failover triggers on availability errors (rate limit, 5xx, network/timeout). Client-side errors (bad request, payload too large) do **not** trigger failover, since another model would fail identically.
