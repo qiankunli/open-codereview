@@ -143,6 +143,7 @@ type ChatResponse struct {
 	Model   string     `json:"-"`
 	Choices []Choice   `json:"-"`
 	Usage   *UsageInfo `json:"-"` // Token usage extracted from API response
+	Alias   string     `json:"-"` // routing alias of the pool member that served this response (set by LLMRouter)
 }
 
 // Content extracts the text content from the first choice, falling back to reasoning content.
@@ -239,6 +240,7 @@ const (
 type routerMember struct {
 	client LLMClient
 	label  string // "protocol/model" for logs
+	alias  string // routing alias, stamped onto the response so comments can be attributed
 }
 
 // LLMRouter is an LLMClient over an ordered pool of models. On a fallover-worthy
@@ -271,7 +273,7 @@ func NewLLMRouter(eps []ResolvedEndpoint, policy string) LLMClient {
 		if ep.MaxRetries == 0 {
 			ep.MaxRetries = routerMemberRetries
 		}
-		members[i] = routerMember{client: NewLLMClient(ep), label: ep.Protocol + "/" + ep.Model}
+		members[i] = routerMember{client: NewLLMClient(ep), label: ep.Protocol + "/" + ep.Model, alias: ep.Alias}
 	}
 	return &LLMRouter{members: members, policy: policy, cooldown: make(map[int]time.Time)}
 }
@@ -281,6 +283,9 @@ func (r *LLMRouter) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*C
 	for _, i := range r.order() {
 		resp, err := r.members[i].client.CompletionsWithCtx(ctx, req)
 		if err == nil {
+			if resp != nil {
+				resp.Alias = r.members[i].alias // attribute downstream comments to this model
+			}
 			return resp, nil
 		}
 		lastErr = err

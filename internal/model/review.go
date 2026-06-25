@@ -9,6 +9,11 @@ type LlmComment struct {
 	StartLine      int    `json:"start_line"`
 	EndLine        int    `json:"end_line"`
 	Thinking       string `json:"thinking,omitempty"`
+	// Alias is the routing alias of the model that produced this comment (from
+	// routing.models[].alias). Lets callers compare per-model output when a multi-model
+	// pool spreads files across models (e.g. round-robin). Empty for single-model runs
+	// or when no alias is configured.
+	Alias string `json:"alias,omitempty"`
 }
 
 // CodeReviewResult holds raw LLM-generated review suggestion for a code segment.
