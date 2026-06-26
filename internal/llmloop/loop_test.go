@@ -39,7 +39,7 @@ func TestExecuteToolCall_CodeCommentOverridesHallucinatedPath(t *testing.T) {
 			Name:      "code_comment",
 			Arguments: string(argsJSON),
 		},
-	}, nil)
+	}, nil, "")
 	if cp.Data != tool.CommentSucceed {
 		t.Fatalf("unexpected result: %+v", cp)
 	}
