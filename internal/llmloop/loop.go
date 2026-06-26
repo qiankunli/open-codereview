@@ -48,6 +48,8 @@ type Runner struct {
 	totalCacheWriteTokens int64
 	warningsMu            sync.Mutex
 	warnings              []AgentWarning
+	toolCallsMu           sync.Mutex
+	toolCalls             map[string]int64
 	compressionMu         sync.Mutex
 	pendingJob            *compressionJob
 }
@@ -92,6 +94,26 @@ func (r *Runner) RecordWarning(warningType, file, message string) {
 		Type:    warningType,
 	})
 	r.warningsMu.Unlock()
+}
+
+// ToolCalls returns a snapshot of the per-tool call counts.
+func (r *Runner) ToolCalls() map[string]int64 {
+	r.toolCallsMu.Lock()
+	defer r.toolCallsMu.Unlock()
+	out := make(map[string]int64, len(r.toolCalls))
+	for k, v := range r.toolCalls {
+		out[k] = v
+	}
+	return out
+}
+
+func (r *Runner) recordToolCall(name string) {
+	r.toolCallsMu.Lock()
+	if r.toolCalls == nil {
+		r.toolCalls = make(map[string]int64)
+	}
+	r.toolCalls[name]++
+	r.toolCallsMu.Unlock()
 }
 
 // RecordUsage adds the prompt/completion/cache tokens reported by an LLM
@@ -253,16 +275,17 @@ func (r *Runner) executeToolCall(ctx context.Context, newPath string, call llm.T
 		return tool.Of(tool.NotAvailableMsg)
 	}
 
+	r.recordToolCall(t.Name())
+
 	var args map[string]any
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 		return tool.Of(fmt.Sprintf("Error parsing tool arguments for %s: %v", t.Name(), err))
 	}
 
-	// Inject current file path as default for code_comment when not provided.
+	// Always inject the current file path for code_comment.
+	// The model sometimes hallucinates a path, so we override it.
 	if t == tool.CodeComment && newPath != "" {
-		if _, ok := args["path"]; !ok {
-			args["path"] = newPath
-		}
+		args["path"] = newPath
 	}
 
 	startTime := time.Now()
